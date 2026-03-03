@@ -28,3 +28,4 @@ Build in this sequence. Do not jump ahead.
 - Validate eviction by asserting response contains "done_reason": "unload".
 - Environment variables are loaded from `.env`. Never hardcode URLs, ports, or thresholds.
 - Frontend polling interval: 2000ms. Never poll faster than this.
+- Constantly update STATUS.md with the latest status of the project. Carefully document with reasoning any deviations from the master specification.
