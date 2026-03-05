@@ -197,17 +197,17 @@ The important consequence: **you cannot use standard system RAM tools (like `psu
 # Terminal 1: Start Ollama (must be running first)
 ollama serve
 
-# Terminal 2: Start Aegis backend
-cd aegis/backend
-uvicorn main:app --host 127.0.0.1 --port 8000 --reload
+# Terminal 2: Start Aegis backend (run from project root)
+cd backend && PYTHONPATH="$PWD/.." uv run uvicorn backend.main:app --host 127.0.0.1 --port 8000
 
-# Terminal 3: Start dashboard
-cd aegis/dashboard
-npm run dev
+# Terminal 3: Start dashboard (run from project root)
+cd dashboard && npm run dev
 
 # Dashboard available at: http://localhost:3000
 # API docs available at:  http://localhost:8000/docs
 ```
+
+> **Note:** `PYTHONPATH="$PWD/.."` points back to the project root after `cd backend`, so Python can resolve `backend.*` imports. `uv` needs to run from `backend/` to find its `pyproject.toml` and `.venv`.
 
 ---
 

@@ -1,97 +1,146 @@
 "use client";
 
-import { Badge } from "@/components/ui/badge";
-import {
-    Table,
-    TableBody,
-    TableCell,
-    TableHead,
-    TableHeader,
-    TableRow,
-} from "@/components/ui/table";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Inbox } from "lucide-react";
 import type { QueueJobSummary } from "@/lib/api";
 
 interface JobQueueTableProps {
     jobs: QueueJobSummary[];
 }
 
-const STATUS_STYLES: Record<string, string> = {
-    QUEUED: "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300",
-    ALLOCATING: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300",
-    RUNNING: "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300",
-    COMPLETED: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300",
-    FAILED: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300",
-};
+function getPriorityPill(priority: number) {
+    if (priority <= 3) {
+        return { label: `P${priority} High`, cls: "bg-red-500/10 text-red-400" };
+    }
+    if (priority <= 6) {
+        return { label: `P${priority} Mid`, cls: "bg-amber-500/10 text-amber-400" };
+    }
+    return { label: `P${priority} Low`, cls: "bg-slate-500/10 text-slate-400" };
+}
+
+function statusCls(status: string): string {
+    const map: Record<string, string> = {
+        QUEUED: "bg-slate-500/10 text-slate-300",
+        ALLOCATING: "bg-amber-500/10 text-amber-400",
+        RUNNING: "bg-indigo-500/10 text-indigo-400",
+        COMPLETED: "bg-emerald-500/10 text-emerald-400",
+        FAILED: "bg-red-500/10 text-red-400",
+    };
+    return map[status] ?? "bg-slate-500/10 text-slate-300";
+}
 
 function truncateId(id: string): string {
-    return id.slice(0, 8) + "…";
+    return id.slice(0, 8);
 }
 
 function formatElapsed(createdAt: string): string {
-    const diffMs = Date.now() - new Date(createdAt).getTime();
-    const secs = Math.max(0, Math.floor(diffMs / 1000));
+    const secs = Math.max(
+        0,
+        Math.floor((Date.now() - new Date(createdAt).getTime()) / 1000)
+    );
     if (secs < 60) return `${secs}s`;
-    const mins = Math.floor(secs / 60);
-    const remSecs = secs % 60;
-    return `${mins}m ${remSecs}s`;
+    const m = Math.floor(secs / 60);
+    return `${m}m ${secs % 60}s`;
 }
 
 export function JobQueueTable({ jobs }: JobQueueTableProps) {
     return (
-        <Card className="col-span-full">
-            <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">
+        <div className="rounded-xl border border-white/5 bg-[#111318] shadow-lg shadow-black/20">
+            {/* Header */}
+            <div className="flex items-baseline justify-between px-4 py-3">
+                <h3 className="text-[11px] font-medium uppercase tracking-[0.08em] text-slate-400">
                     Job Queue
-                </CardTitle>
-            </CardHeader>
-            <CardContent>
-                {jobs.length === 0 ? (
-                    <p className="py-6 text-center text-sm text-muted-foreground">
-                        No active jobs
-                    </p>
-                ) : (
-                    <Table>
-                        <TableHeader>
-                            <TableRow>
-                                <TableHead>Job ID</TableHead>
-                                <TableHead>Model</TableHead>
-                                <TableHead>Priority</TableHead>
-                                <TableHead>Status</TableHead>
-                                <TableHead>Submitted</TableHead>
-                                <TableHead>Elapsed</TableHead>
-                            </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                            {jobs.map((job) => (
-                                <TableRow key={job.job_id}>
-                                    <TableCell className="font-mono text-xs">
-                                        {truncateId(job.job_id)}
-                                    </TableCell>
-                                    <TableCell className="font-medium">
-                                        {job.model_name}
-                                    </TableCell>
-                                    <TableCell>{job.priority}</TableCell>
-                                    <TableCell>
-                                        <Badge
-                                            variant="outline"
-                                            className={STATUS_STYLES[job.status] ?? ""}
-                                        >
-                                            {job.status}
-                                        </Badge>
-                                    </TableCell>
-                                    <TableCell className="text-xs text-muted-foreground">
-                                        {new Date(job.created_at).toLocaleTimeString()}
-                                    </TableCell>
-                                    <TableCell className="text-xs text-muted-foreground">
-                                        {formatElapsed(job.created_at)}
-                                    </TableCell>
-                                </TableRow>
-                            ))}
-                        </TableBody>
-                    </Table>
-                )}
-            </CardContent>
-        </Card>
+                </h3>
+                <span className="text-[13px] tabular-nums text-slate-300">
+                    {jobs.length} active
+                </span>
+            </div>
+
+            {jobs.length === 0 ? (
+                /* Proper empty state */
+                <div className="px-4 pb-4">
+                    <div className="flex flex-col items-center justify-center rounded-lg bg-white/[0.02] py-12">
+                        <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-white/[0.05]">
+                            <Inbox className="h-6 w-6 text-slate-400" />
+                        </div>
+                        <p className="text-[13px] font-medium text-slate-300">
+                            Queue is empty
+                        </p>
+                        <p className="mt-1 text-[12px] text-slate-500">
+                            Submit a job to see it here
+                        </p>
+                    </div>
+                </div>
+            ) : (
+                <div className="overflow-x-auto">
+                    <table className="w-full">
+                        <thead>
+                            <tr className="border-t border-border">
+                                <th className="px-4 py-2 text-left text-[11px] font-medium uppercase tracking-[0.08em] text-slate-400">
+                                    Job ID
+                                </th>
+                                <th className="px-4 py-2 text-left text-[11px] font-medium uppercase tracking-[0.08em] text-slate-400">
+                                    Model
+                                </th>
+                                <th className="px-4 py-2 text-left text-[11px] font-medium uppercase tracking-[0.08em] text-slate-400">
+                                    Priority
+                                </th>
+                                <th className="px-4 py-2 text-left text-[11px] font-medium uppercase tracking-[0.08em] text-slate-400">
+                                    Status
+                                </th>
+                                <th className="px-4 py-2 text-left text-[11px] font-medium uppercase tracking-[0.08em] text-slate-400">
+                                    Submitted
+                                </th>
+                                <th className="px-4 py-2 text-right text-[11px] font-medium uppercase tracking-[0.08em] text-slate-400">
+                                    Elapsed
+                                </th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {jobs.map((job) => {
+                                const pri = getPriorityPill(job.priority);
+                                const isRunning = job.status === "RUNNING";
+
+                                return (
+                                    <tr
+                                        key={job.job_id}
+                                        className={`border-t transition-colors ${isRunning
+                                            ? "border-l-2 border-l-indigo-500 border-t-border/50 bg-indigo-500/[0.03]"
+                                            : "border-t-border/50 hover:bg-white/[0.02]"
+                                            }`}
+                                    >
+                                        <td className="px-4 py-2.5 font-mono text-[12px] text-slate-400">
+                                            {truncateId(job.job_id)}
+                                        </td>
+                                        <td className="px-4 py-2.5 text-[13px] font-medium text-white">
+                                            {job.model_name}
+                                        </td>
+                                        <td className="px-4 py-2.5">
+                                            <span
+                                                className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${pri.cls}`}
+                                            >
+                                                {pri.label}
+                                            </span>
+                                        </td>
+                                        <td className="px-4 py-2.5">
+                                            <span
+                                                className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${statusCls(job.status)}`}
+                                            >
+                                                {job.status}
+                                            </span>
+                                        </td>
+                                        <td className="px-4 py-2.5 text-[13px] text-slate-300">
+                                            {new Date(job.created_at).toLocaleTimeString()}
+                                        </td>
+                                        <td className="px-4 py-2.5 text-right text-[13px] tabular-nums text-slate-300">
+                                            {formatElapsed(job.created_at)}
+                                        </td>
+                                    </tr>
+                                );
+                            })}
+                        </tbody>
+                    </table>
+                </div>
+            )}
+        </div>
     );
 }
