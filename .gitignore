@@ -3,3 +3,9 @@ __pycache__/
 .venv/
 node_modules/
 *.db
+.next/
+
+# Internal project docs (local only, not pushed to git)
+STATUS.md
+MASTER_SPEC.md
+aegis_scaffolding.md
