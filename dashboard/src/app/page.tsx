@@ -1,7 +1,13 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { fetchMetrics, type MetricsResponse } from "@/lib/api";
+import {
+  cancelQueuedJobs,
+  fetchMetrics,
+  fetchModelRegistry,
+  type MetricsResponse,
+  type ModelRegistryEntry,
+} from "@/lib/api";
 import { LoadedModelCard } from "@/components/LoadedModelCard";
 import { ThroughputStats } from "@/components/ThroughputStats";
 import {
@@ -9,6 +15,8 @@ import {
   type DataPoint,
 } from "@/components/MemoryPressureChart";
 import { JobQueueTable } from "@/components/JobQueueTable";
+import { ConcurrencyStatus } from "@/components/ConcurrencyStatus";
+import { ModelRegistryTable } from "@/components/ModelRegistryTable";
 import { Shield } from "lucide-react";
 
 const POLL_INTERVAL_MS = 2000;
@@ -25,16 +33,24 @@ function formatProvider(provider: string) {
 
 export default function DashboardPage() {
   const [metrics, setMetrics] = useState<MetricsResponse | null>(null);
+  const [registry, setRegistry] = useState<ModelRegistryEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [pressureHistory, setPressureHistory] = useState<DataPoint[]>([]);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [secondsAgo, setSecondsAgo] = useState(0);
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
+  const [cancelMessage, setCancelMessage] = useState<string | null>(null);
+  const [canceling, setCanceling] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const poll = useCallback(async () => {
     try {
-      const data = await fetchMetrics();
+      const [data, registryPayload] = await Promise.all([
+        fetchMetrics(),
+        fetchModelRegistry(),
+      ]);
       setMetrics(data);
+      setRegistry(registryPayload.models);
       setError(null);
       setLastUpdated(new Date());
 
@@ -60,15 +76,21 @@ export default function DashboardPage() {
   }, []);
 
   useEffect(() => {
-    poll();
-    intervalRef.current = setInterval(poll, POLL_INTERVAL_MS);
+    const bootstrap = setTimeout(() => {
+      void poll();
+    }, 0);
+    intervalRef.current = setInterval(() => {
+      void poll();
+    }, POLL_INTERVAL_MS);
     return () => {
+      clearTimeout(bootstrap);
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
   }, [poll]);
 
   useEffect(() => {
     const ticker = setInterval(() => {
+      setNowMs(Date.now());
       if (lastUpdated) {
         setSecondsAgo(Math.floor((Date.now() - lastUpdated.getTime()) / 1000));
       }
@@ -78,9 +100,26 @@ export default function DashboardPage() {
 
   const runningJob = metrics?.queue.jobs.find((j) => j.status === "RUNNING");
 
+  const onCancelQueued = useCallback(async () => {
+    if (!confirm("Cancel all currently queued jobs? Running jobs will continue.")) {
+      return;
+    }
+    try {
+      setCanceling(true);
+      const result = await cancelQueuedJobs();
+      setCancelMessage(`Cancelled ${result.cancelled_count} queued job(s).`);
+      await poll();
+    } catch (e) {
+      setCancelMessage(
+        e instanceof Error ? e.message : "Failed to cancel queued jobs."
+      );
+    } finally {
+      setCanceling(false);
+    }
+  }, [poll]);
+
   return (
     <div className="min-h-screen bg-background">
-      {/* Top bar */}
       <header className="border-b border-border bg-[#111318]">
         <div className="mx-auto flex max-w-[1400px] items-center justify-between px-6 py-3">
           <div className="flex items-center gap-3">
@@ -96,6 +135,16 @@ export default function DashboardPage() {
           </div>
 
           <div className="flex items-center gap-4">
+            {metrics && (
+              <button
+                type="button"
+                disabled={canceling}
+                onClick={() => void onCancelQueued()}
+                className="rounded bg-amber-500/10 px-2.5 py-1 text-[11px] font-medium uppercase tracking-wider text-amber-300 disabled:opacity-50"
+              >
+                {canceling ? "Cancelling..." : "Cancel Queued"}
+              </button>
+            )}
             {lastUpdated && !error && (
               <span className="flex items-center gap-1.5 text-[11px] text-slate-400">
                 <span className="relative flex h-1.5 w-1.5">
@@ -119,30 +168,38 @@ export default function DashboardPage() {
       </header>
 
       <main className="mx-auto max-w-[1400px] px-6 py-5">
+        {cancelMessage && (
+          <div className="mb-3 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[12px] text-amber-200">
+            {cancelMessage}
+          </div>
+        )}
         {metrics ? (
           <div className="space-y-4">
-            {/* Row 1: 5-column stat grid */}
-            <div className="grid grid-cols-5 gap-3">
+            <div className="grid grid-cols-6 gap-3">
               <LoadedModelCard
-                loadedModel={metrics.loaded_model}
+                loadedModels={metrics.loaded_models}
+                loadedModelLegacy={metrics.loaded_model}
                 hardware={metrics.hardware}
                 jobStartedAt={runningJob?.created_at ?? null}
+                nowMs={nowMs}
+                warmCacheActive={metrics.warm_cache_active}
+                warmCacheModel={metrics.warm_cache_model}
               />
+              <ConcurrencyStatus concurrency={metrics.concurrency} />
               <ThroughputStats
                 throughput={metrics.throughput}
                 queueDepth={metrics.queue.depth}
               />
             </div>
 
-            {/* Row 2: Chart */}
             <MemoryPressureChart
               data={pressureHistory}
               vramUsedBytes={metrics.hardware.vram_used_bytes}
               vramTotalBytes={metrics.hardware.vram_total_bytes}
             />
 
-            {/* Row 3: Table */}
             <JobQueueTable jobs={metrics.queue.jobs} />
+            <ModelRegistryTable models={registry} />
           </div>
         ) : (
           <div className="flex h-64 items-center justify-center">

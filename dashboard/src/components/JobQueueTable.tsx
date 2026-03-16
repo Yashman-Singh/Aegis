@@ -99,13 +99,16 @@ export function JobQueueTable({ jobs }: JobQueueTableProps) {
                             {jobs.map((job) => {
                                 const pri = getPriorityPill(job.priority);
                                 const isRunning = job.status === "RUNNING";
+                                const isBatched = Boolean(job.batch_id);
 
                                 return (
                                     <tr
                                         key={job.job_id}
                                         className={`border-t transition-colors ${isRunning
                                             ? "border-l-2 border-l-indigo-500 border-t-border/50 bg-indigo-500/[0.03]"
-                                            : "border-t-border/50 hover:bg-white/[0.02]"
+                                            : isBatched
+                                                ? "border-l-2 border-l-amber-500 border-t-border/50 bg-amber-500/[0.02]"
+                                                : "border-t-border/50 hover:bg-white/[0.02]"
                                             }`}
                                     >
                                         <td className="px-4 py-2.5 font-mono text-[12px] text-slate-400">

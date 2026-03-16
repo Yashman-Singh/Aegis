@@ -2,10 +2,12 @@
 __pycache__/
 .venv/
 node_modules/
+.vscode/
 *.db
 .next/
 
-# Internal project docs (local only, not pushed to git)
+# Internal project docs 
 STATUS.md
 MASTER_SPEC.md
+v2_MASTER_SPEC.md
 aegis_scaffolding.md

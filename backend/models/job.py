@@ -1,8 +1,9 @@
 """
-Job SQLAlchemy ORM model.
+SQLAlchemy ORM models.
 
-Represents an inference job in the Aegis queue with full state machine
-lifecycle tracking (QUEUED → ALLOCATING → RUNNING → COMPLETED / FAILED).
+Represents:
+- inference jobs with lifecycle tracking
+- per-model VRAM profile records for V2 empirical scheduling
 """
 
 from __future__ import annotations
@@ -45,3 +46,20 @@ class Job(Base):
         DateTime(timezone=True), nullable=True
     )
     latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    batch_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    vram_estimated_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    vram_actual_peak_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class ModelVramProfile(Base):
+    __tablename__ = "model_vram_profiles"
+
+    model_name: Mapped[str] = mapped_column(String(255), primary_key=True)
+    p95_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    sample_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_updated: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="static_baseline")

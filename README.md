@@ -1,200 +1,151 @@
 # Aegis
 
-A local inference runtime that sits between your apps and [Ollama](https://ollama.com). It manages GPU memory, queues inference jobs, and makes sure your machine doesn't freeze when running AI models locally.
+A local inference runtime that sits between your apps and [Ollama](https://ollama.com). Aegis manages queueing, VRAM-aware scheduling, model lifecycle, and runtime visibility for local model inference.
 
-## The problem
+## V2 highlights
 
-Ollama is great for running local LLMs, but it has a blind spot: after each inference, it holds the model in GPU memory for 5 minutes with no awareness of how much VRAM is actually available. On Apple Silicon (where CPU and GPU share the same memory pool), this is especially bad. Fire off a couple of requests in a row, or load a model that's slightly too large, and macOS starts killing processes to survive.
-
-There's no built-in way to say "check memory first" or "evict the model when you're done." Aegis adds that layer.
-
-## What it does
-
-Aegis runs as a background service on your machine. Other applications send inference requests to its API instead of hitting Ollama directly. For each request, Aegis:
-
-1. Validates the request and adds it to a priority queue
-2. Checks available GPU memory before touching Ollama
-3. Acquires an exclusive inference lock (only one job runs at a time)
-4. Dispatches the request to Ollama
-5. Evicts the model from VRAM immediately after the job completes
-6. Releases the lock so the next job can start clean
-
-The sequential execution is intentional — it's the simplest way to guarantee that two models never compete for the same memory. The eviction-inside-lock pattern prevents a race condition where the next job reads stale VRAM state before the previous model has actually been unloaded.
+- Configurable concurrent workers via `AEGIS_MAX_CONCURRENT_JOBS`
+- Atomic VRAM reservations to avoid scheduling overcommit
+- Per-model lifecycle locks and refcounted load/evict behavior
+- Warm-cache batching (single-worker mode only)
+- Profiling-based model registry refinement (single-worker mode only)
+- Additive DB migrations for V2 columns + `model_vram_profiles`
+- Versioned metrics contracts: `/v1/metrics` and `/v2/metrics`
+- Queue management endpoint: `POST /v1/jobs/cancel-queued`
+- Dashboard cards for active models, concurrency, warm-cache, and model registry
 
 ## Architecture
 
-```
-Client apps  ──HTTP──▶  Aegis backend (FastAPI, port 8000)  ──HTTP──▶  Ollama (port 11434)
-                              │
-                              ├── Priority queue (asyncio.PriorityQueue)
-                              ├── Inference lock (asyncio.Lock)
-                              ├── SQLite database (WAL mode, async)
-                              └── Hardware monitor (Metal / NVML / psutil fallback)
+```text
+Client Apps ──HTTP──▶ Aegis Backend (FastAPI:8000) ──HTTP──▶ Ollama (11434)
+                             │
+                             ├── Priority queue + worker tasks
+                             ├── VRAM reservation + model lock state
+                             ├── SQLite (jobs + model_vram_profiles)
+                             └── Hardware monitor (Apple/NVIDIA/CPU fallback)
 
-Dashboard (Next.js, port 3000)  ──polls every 2s──▶  GET /v1/metrics
+Dashboard (Next.js:3000) ──polls──▶ /v1/metrics + /v1/models/registry
 ```
-
-- **Backend**: Python 3.11, FastAPI, fully async. Handles request ingestion, job lifecycle, VRAM checks, Ollama dispatch, and forced model eviction. Jobs are persisted to SQLite via async SQLAlchemy.
-- **Hardware layer**: Pluggable provider pattern. Apple Silicon uses Metal's `recommendedMaxWorkingSetSize()` for VRAM data. NVIDIA uses NVML. CPU-only systems fall back to psutil. The rest of the codebase is hardware-agnostic.
-- **Queue engine**: `asyncio.PriorityQueue` with a worker loop. Priority ties are broken by submission time (FIFO). Jobs move through a strict state machine: `QUEUED → ALLOCATING → RUNNING → COMPLETED / FAILED`.
-- **Dashboard**: Next.js app that polls the metrics endpoint every 2 seconds. Shows VRAM pressure over time, the job queue, which model is loaded, and throughput stats. Read-only — no job submission from the UI.
 
 ## Prerequisites
 
-- **Python 3.11+**
-- **[uv](https://docs.astral.sh/uv/)** (Python package manager)
-- **Node.js 18+** and npm
-- **[Ollama](https://ollama.com)** installed and working (`ollama run llama3.2:3b` should work)
+- Python 3.11+
+- [uv](https://docs.astral.sh/uv/)
+- Node.js 18+
+- [Ollama](https://ollama.com)
 
 ## Setup
 
 ```bash
-# Clone the repo
 git clone https://github.com/<your-username>/aegis.git
 cd aegis
 
-# Install backend dependencies
 cd backend
 uv sync
 cd ..
 
-# Install dashboard dependencies
 cd dashboard
 npm install
 cd ..
-
-# Create your .env file
-cp .env.example .env   # or create it manually — see Configuration below
 ```
+
+Create `.env` in the project root (example values below).
 
 ## Running
 
-You need three terminals. Start Ollama first.
+Start each service in a separate terminal.
 
 ```bash
-# Terminal 1 — Ollama
+# Terminal 1
 ollama serve
 
-# Terminal 2 — Aegis backend
+# Terminal 2
 cd backend && PYTHONPATH="$PWD/.." uv run uvicorn backend.main:app --host 127.0.0.1 --port 8000
 
-# Terminal 3 — Dashboard
+# Terminal 3
 cd dashboard && npm run dev
 ```
 
-> The `PYTHONPATH` override is needed because `uv` runs from `backend/` (where `pyproject.toml` lives) but the code uses `backend.*` import paths that resolve relative to the project root.
+- Dashboard: `http://127.0.0.1:3000`
+- API docs: `http://127.0.0.1:8000/docs`
 
-Once everything is up:
-- **Dashboard**: http://localhost:3000
-- **API docs**: http://localhost:8000/docs
+## API
 
-## Usage
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/v1/jobs/submit` | Submit inference job (`priority` 1-10, lower is higher priority). |
+| `GET` | `/v1/jobs/{job_id}` | Poll job status/result. |
+| `POST` | `/v1/jobs/cancel-queued` | Cancel all queued jobs (or only one model with `?model_name=...`). |
+| `GET` | `/v1/metrics` | Backward-compatible metrics (includes `loaded_model` + `loaded_models`). |
+| `GET` | `/v2/metrics` | V2 metrics contract (`loaded_models` only). |
+| `GET` | `/v1/models/registry` | Model VRAM registry view (p95, buffered estimate, sample count, source). |
 
-Submit a job:
+## Example request
 
 ```bash
-curl -X POST http://localhost:8000/v1/jobs/submit \
+curl -X POST http://127.0.0.1:8000/v1/jobs/submit \
   -H "Content-Type: application/json" \
   -d '{
     "model_name": "llama3.2:3b",
-    "priority": 1,
+    "priority": 3,
     "payload": {
-      "prompt": "Explain what a mutex is in two sentences.",
+      "prompt": "Explain mutexes in two sentences.",
       "stream": false
     }
   }'
 ```
 
-Response:
-
-```json
-{
-  "job_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
-  "status": "QUEUED"
-}
-```
-
-Check the result:
-
-```bash
-curl http://localhost:8000/v1/jobs/<job_id>
-```
-
-Get system metrics (what the dashboard polls):
-
-```bash
-curl http://localhost:8000/v1/metrics
-```
-
-## API
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/v1/jobs/submit` | Submit an inference job. Priority 1–10 (lower = higher). |
-| `GET` | `/v1/jobs/{job_id}` | Get job status, result, timing, and error info. |
-| `GET` | `/v1/metrics` | VRAM state, queue depth, loaded model, throughput stats. |
-
-Full interactive docs at `/docs` when the backend is running.
-
 ## Configuration
 
-All via `.env` in the project root:
+All values are read from `.env` at backend startup.
 
-| Variable | Default | Description |
-|----------|---------|-------------|
+| Variable | Default | Notes |
+|---|---|---|
 | `AEGIS_OLLAMA_URL` | `http://localhost:11434` | Ollama base URL |
-| `AEGIS_OLLAMA_TIMEOUT_SECONDS` | `120` | Max wait for an inference response |
-| `AEGIS_VRAM_THRESHOLD` | `0.75` | Fraction of GPU memory treated as allocatable (safety margin) |
-| `AEGIS_MIN_FREE_VRAM_BYTES` | `536870912` | Minimum free VRAM (bytes) before a job can start. Default: 512MB |
-| `AEGIS_JOB_RETENTION_HOURS` | `24` | Auto-delete completed/failed jobs after this many hours |
-| `AEGIS_DB_PATH` | `~/.aegis/aegis.db` | SQLite database location |
+| `AEGIS_OLLAMA_TIMEOUT_SECONDS` | `120` | Ollama inference timeout |
+| `AEGIS_DB_PATH` | `~/.aegis/aegis.db` | SQLite DB path |
+| `AEGIS_JOB_RETENTION_HOURS` | `24` | Cleanup window for terminal jobs |
+| `AEGIS_MIN_FREE_VRAM_BYTES` | `536870912` | Additional minimum free VRAM gate |
+| `AEGIS_MAX_CONCURRENT_JOBS` | `1` | Worker count + semaphore slots |
+| `AEGIS_CONCURRENT_VRAM_BUFFER` | `0.20` | Buffer multiplier for model estimates |
+| `AEGIS_EMERGENCY_VRAM_FLOOR_BYTES` | `1073741824` | Reserved VRAM floor during scheduling |
+| `AEGIS_WARM_CACHE_ENABLED` | `true` | Warm-cache batching toggle |
+| `AEGIS_WARM_CACHE_MAX_DRAIN` | `10` | Max same-model queue drain per batch |
+| `AEGIS_PROFILE_VRAM` | `true` | Per-job VRAM profiling toggle |
+| `AEGIS_PROFILE_SAMPLE_INTERVAL_MS` | `500` | Profiling sample cadence |
+| `AEGIS_MODEL_REGISTRY_PATH` | `~/.aegis/model_registry.json` | Registry cache/export path |
+| `AEGIS_FAIL_NONTERMINAL_ON_STARTUP` | `false` | If true, startup marks stale non-terminal jobs as failed |
 
-## Tech stack
+### Policy rules
 
-| Layer | Technologies |
-|-------|-------------|
-| Backend | Python 3.11, FastAPI, Uvicorn, async SQLAlchemy, aiosqlite, httpx |
-| GPU telemetry | pyobjc-framework-Metal (Apple Silicon), pynvml (NVIDIA), psutil (fallback) |
-| Frontend | Next.js (App Router), Tailwind CSS, Shadcn UI, Recharts |
-| Database | SQLite with WAL mode |
-| Service mgmt | launchd (macOS), systemd (Linux) |
+- If `AEGIS_MAX_CONCURRENT_JOBS > 1`, warm-cache is auto-disabled even if enabled in env.
+- If `AEGIS_MAX_CONCURRENT_JOBS > 1`, profiling is auto-disabled even if enabled in env.
 
-## Project structure
+## Validation and tests
 
-```
-aegis/
-├── backend/
-│   ├── main.py                    # FastAPI app, lifespan, route mounting
-│   ├── core/
-│   │   ├── queue_engine.py        # Worker loop, inference lock, dispatch + eviction
-│   │   ├── database.py            # Async SQLAlchemy engine, WAL init
-│   │   └── ollama_client.py       # Ollama HTTP client (generate + evict)
-│   ├── models/
-│   │   ├── job.py                 # Job ORM model
-│   │   └── schemas.py             # Pydantic request/response schemas
-│   └── hardware/
-│       ├── registry.py            # Provider detection and loading
-│       ├── apple_silicon.py       # Metal API provider
-│       ├── nvidia.py              # NVML provider
-│       └── cpu_fallback.py        # psutil fallback
-├── dashboard/
-│   ├── src/app/page.tsx           # Dashboard root, polling orchestration
-│   └── src/components/
-│       ├── MemoryPressureChart.tsx # VRAM pressure time-series
-│       ├── JobQueueTable.tsx       # Active + recent jobs
-│       ├── LoadedModelCard.tsx     # Current model status
-│       └── ThroughputStats.tsx     # Latency and completion stats
-├── launchd/                       # macOS service config
-├── systemd/                       # Linux service config
-├── scripts/                       # Stress tests and comparison scripts
-└── .env                           # Local config (not committed)
+### Backend tests
+
+```bash
+cd backend
+PYTHONPATH="$PWD/.." uv run pytest
 ```
 
-## Known limitations
+### End-to-end validation (concurrent + dashboard contracts)
 
-- **Apple Silicon VRAM is approximate.** Metal reports a recommended working set size, not a real-time allocation count. Current usage is estimated from system memory pressure. This is a known constraint of the Metal API.
-- **One job at a time.** Sequential execution is a deliberate V1 design choice. Parallel inference is planned for V2.
-- **Ollama must be running independently.** Aegis doesn't start or manage the Ollama process.
-- **Polling only.** No webhooks or WebSocket push — clients poll for results.
+```bash
+bash scripts/v2_validation.sh
+```
 
+### Non-concurrent profiling run (registry sample/p95 updates)
 
+Use only when backend is running with `AEGIS_MAX_CONCURRENT_JOBS=1`.
+
+```bash
+bash scripts/v2_profile_run.sh
+```
+
+## Notes
+
+- Queue rows persist in SQLite across restarts. Use `POST /v1/jobs/cancel-queued` (or the dashboard button) to clear queued jobs.
+- `/v1/metrics` keeps legacy compatibility while exposing V2 fields additively.
+- `/v2/metrics` is the forward-only contract for new consumers.

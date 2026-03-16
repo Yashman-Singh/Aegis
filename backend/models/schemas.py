@@ -37,6 +37,10 @@ class JobSubmitResponse(BaseModel):
     status: str = "QUEUED"
 
 
+class CancelQueuedResponse(BaseModel):
+    cancelled_count: int
+
+
 # ---------------------------------------------------------------------------
 # Job status
 # ---------------------------------------------------------------------------
@@ -75,6 +79,7 @@ class QueueJobSummary(BaseModel):
     priority: int
     status: str
     created_at: datetime
+    batch_id: str | None = None
 
 
 class QueueMetrics(BaseModel):
@@ -88,10 +93,48 @@ class ThroughputMetrics(BaseModel):
     avg_latency_ms_last_100: float | None = None
 
 
+class ConcurrencyMetrics(BaseModel):
+    max_concurrent_jobs: int
+    currently_running: int
+    active_reservations_bytes: int
+    vram_available_for_scheduling: int
+
+
 class MetricsResponse(BaseModel):
     """GET /v1/metrics response."""
 
     hardware: HardwareMetrics
     queue: QueueMetrics
     loaded_model: str | None = None
+    loaded_models: list[str] = Field(default_factory=list)
+    concurrency: ConcurrencyMetrics
+    warm_cache_active: bool = False
+    warm_cache_model: str | None = None
+    warm_cache_queue_depth: int = 0
     throughput: ThroughputMetrics
+
+
+class MetricsV2Response(BaseModel):
+    """GET /v2/metrics response."""
+
+    hardware: HardwareMetrics
+    queue: QueueMetrics
+    loaded_models: list[str] = Field(default_factory=list)
+    concurrency: ConcurrencyMetrics
+    warm_cache_active: bool = False
+    warm_cache_model: str | None = None
+    warm_cache_queue_depth: int = 0
+    throughput: ThroughputMetrics
+
+
+class ModelRegistryEntry(BaseModel):
+    model_name: str
+    p95_bytes: int
+    p95_gb: float
+    with_buffer_bytes: int
+    sample_count: int
+    source: str
+
+
+class ModelRegistryResponse(BaseModel):
+    models: list[ModelRegistryEntry]

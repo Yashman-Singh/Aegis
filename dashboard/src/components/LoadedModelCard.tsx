@@ -4,9 +4,13 @@ import { Cpu } from "lucide-react";
 import type { HardwareMetrics } from "@/lib/api";
 
 interface LoadedModelCardProps {
-    loadedModel: string | null;
+    loadedModels: string[];
+    loadedModelLegacy: string | null;
     hardware: HardwareMetrics;
     jobStartedAt: string | null;
+    nowMs: number;
+    warmCacheActive: boolean;
+    warmCacheModel: string | null;
 }
 
 function fmtGB(bytes: number): string {
@@ -14,15 +18,26 @@ function fmtGB(bytes: number): string {
 }
 
 export function LoadedModelCard({
-    loadedModel,
+    loadedModels,
+    loadedModelLegacy,
     hardware,
     jobStartedAt,
+    nowMs,
+    warmCacheActive,
+    warmCacheModel,
 }: LoadedModelCardProps) {
+    const activeModels =
+        loadedModels.length > 0
+            ? loadedModels
+            : loadedModelLegacy
+                ? [loadedModelLegacy]
+                : [];
+
     let elapsed = "";
     if (jobStartedAt) {
         const diffS = Math.max(
             0,
-            Math.floor((Date.now() - new Date(jobStartedAt).getTime()) / 1000)
+            Math.floor((nowMs - new Date(jobStartedAt).getTime()) / 1000)
         );
         const m = Math.floor(diffS / 60);
         const s = diffS % 60;
@@ -35,36 +50,43 @@ export function LoadedModelCard({
 
     return (
         <div className="rounded-xl border border-white/5 bg-[#111318] p-4 shadow-lg shadow-black/20">
-            {/* Label */}
             <div className="mb-3 flex items-center gap-2">
                 <Cpu className="h-3.5 w-3.5 text-slate-400" />
                 <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-slate-400">
-                    Active Model
+                    Active Models
                 </span>
-            </div>
-
-            {/* Primary: model name — 48px tier would be too large for model names, using 24px */}
-            <div className="mb-0.5 flex items-baseline gap-2">
-                <span className="text-[22px] font-bold leading-tight tracking-tight text-white">
-                    {loadedModel ?? "Idle"}
-                </span>
-                {loadedModel && (
-                    <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-[0.1em] text-indigo-400">
-                        <span className="relative flex h-1.5 w-1.5">
-                            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-indigo-400 opacity-75" />
-                            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-indigo-400" />
-                        </span>
-                        Running
+                {warmCacheActive && (
+                    <span className="ml-auto rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-[0.1em] text-amber-300">
+                        Warm Cache
                     </span>
                 )}
             </div>
 
-            {/* Secondary detail */}
+            <div className="mb-0.5 flex flex-wrap items-center gap-2">
+                {activeModels.length > 0 ? (
+                    activeModels.map((model) => (
+                        <span
+                            key={model}
+                            className="rounded bg-indigo-500/10 px-2 py-1 text-[12px] font-semibold text-indigo-300"
+                        >
+                            {model}
+                        </span>
+                    ))
+                ) : (
+                    <span className="text-[22px] font-bold leading-tight tracking-tight text-white">
+                        Idle
+                    </span>
+                )}
+            </div>
+
             <p className="mb-3 text-[13px] text-slate-300">
-                {elapsed ? `Elapsed ${elapsed}` : "No job in progress"}
+                {warmCacheActive && warmCacheModel
+                    ? `Batching ${warmCacheModel}`
+                    : elapsed
+                        ? `Elapsed ${elapsed}`
+                        : "No job in progress"}
             </p>
 
-            {/* VRAM micro-bar */}
             <div className="space-y-1">
                 <div className="flex items-baseline justify-between">
                     <span className="text-[11px] uppercase tracking-[0.08em] text-slate-400">
